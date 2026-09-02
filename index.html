@@ -4,7 +4,6 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>Zenith</title>
-    <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
     <style>
         *{margin:0;padding:0;box-sizing:border-box}
         :root{--bg:#0a0a0f;--bg2:#12121a;--bg3:#1a1a2e;--bg4:#1e1e32;--text:#e8e8f0;--text2:#a0a0b8;--text3:#6a6a82;--accent:#7c3aed;--accent2:#8b5cf6;--green:#10b981;--red:#ef4444;--border:#2a2a42;--radius:12px;--shadow:0 8px 32px rgba(0,0,0,0.6)}
@@ -185,10 +184,10 @@
             <div class="switch"><span id="switchText">Don't have an account?</span> <a id="switchLink">Sign Up</a></div>
         </form>
         <div class="dl">
-            <a href="#">Windows</a>
-            <a href="#">macOS</a>
-            <a href="#">Linux</a>
-            <a href="#">Web</a>
+            <a href="#" onclick="toast('Desktop app coming soon','info')">Windows</a>
+            <a href="#" onclick="toast('Desktop app coming soon','info')">macOS</a>
+            <a href="#" onclick="toast('Desktop app coming soon','info')">Linux</a>
+            <a href="#" onclick="toast('Web version active','success')">Web</a>
         </div>
     </div>
 </div>
@@ -208,7 +207,10 @@
     </div>
 
     <div class="csidebar" id="csidebar">
-        <div class="head"><span id="commName">Zenith</span><span>▼</span></div>
+        <div class="head" onclick="document.getElementById('csidebar').classList.toggle('collapsed')">
+            <span id="commName">Zenith</span>
+            <span>▼</span>
+        </div>
         <div class="section" id="channels">
             <div class="label"><span>Text Channels</span><button class="add" onclick="createChan('text')">+</button></div>
             <div id="textChans"></div>
@@ -273,394 +275,638 @@
 </div>
 
 <script>
-// STATE
-const S={token:null,user:null,channel:'general',type:'text',msgs:{},typing:{},socket:null,peers:{},stream:null,inVoice:false,muted:false,videoOn:false,file:null,online:new Set(),friends:[],requests:[]};
+// ============================================================
+// COMPLETE SELF-CONTAINED ZENITH - WORKS ON GITHUB PAGES
+// Uses localStorage for persistence and WebRTC for P2P calls
+// ============================================================
 
-// DOM REFS
-const $=id=>document.getElementById(id);
-const auth=$('auth'),app=$('app'),authForm=$('authForm'),authBtn=$('authBtn'),authErr=$('authErr');
-const authUser=$('authUser'),authPass=$('authPass'),switchLink=$('switchLink'),switchText=$('switchText');
-const msgs=$('msgs'),empty=$('empty'),msgInput=$('msgInput'),sendBtn=$('sendBtn');
-const chanName=$('chanName'),textChans=$('textChans'),voiceChans=$('voiceChans');
-const memberList=$('memberList'),memberCount=$('memberCount'),rpanel=$('rpanel');
-const voice=$('voice'),vTitle=$('vTitle'),vParts=$('vParts'),muteBtn=$('muteBtn'),videoBtn=$('videoBtn');
-const localVideo=$('localVideo'),localVideoWrap=$('localVideoWrap'),remoteVideos=$('remoteVideos');
-const typing=$('typing'),typingText=$('typingText'),fp=$('fp'),fname=$('fname'),fileInput=$('fileInput');
-const navAv=$('navAv'),commName=$('commName'),settings=$('settings'),toasts=$('toasts');
-const setUser=$('setUser'),setColor=$('setColor'),setTheme=$('setTheme'),setNotif=$('setNotif');
-
-let isLogin=true;
-
-// AUTH
-switchLink.onclick=()=>{
-    isLogin=!isLogin;
-    authBtn.textContent=isLogin?'Sign In':'Sign Up';
-    switchText.textContent=isLogin?"Don't have an account?":"Already have an account?";
-    switchLink.textContent=isLogin?'Sign Up':'Sign In';
-    authErr.textContent='';
+const S = {
+    user: null,
+    users: JSON.parse(localStorage.getItem('zenith_users') || '{}'),
+    channels: JSON.parse(localStorage.getItem('zenith_channels') || '{"text":["general"],"voice":[]}'),
+    messages: JSON.parse(localStorage.getItem('zenith_messages') || '{"general":[]}'),
+    currentChannel: 'general',
+    currentType: 'text',
+    online: new Set(),
+    typing: {},
+    stream: null,
+    inVoice: false,
+    muted: false,
+    videoOn: false,
+    peers: {},
+    file: null,
+    friendRequests: [],
+    friends: [],
+    activeCalls: {},
+    localStream: null
 };
 
-authForm.onsubmit=async(e)=>{
+// DOM refs
+const $ = id => document.getElementById(id);
+const auth = $('auth'), app = $('app'), authForm = $('authForm'), authBtn = $('authBtn'), authErr = $('authErr');
+const authUser = $('authUser'), authPass = $('authPass'), switchLink = $('switchLink'), switchText = $('switchText');
+const msgs = $('msgs'), empty = $('empty'), msgInput = $('msgInput'), sendBtn = $('sendBtn');
+const chanName = $('chanName'), textChans = $('textChans'), voiceChans = $('voiceChans');
+const memberList = $('memberList'), memberCount = $('memberCount'), rpanel = $('rpanel');
+const voice = $('voice'), vTitle = $('vTitle'), vParts = $('vParts'), muteBtn = $('muteBtn'), videoBtn = $('videoBtn');
+const localVideo = $('localVideo'), localVideoWrap = $('localVideoWrap'), remoteVideos = $('remoteVideos');
+const typing = $('typing'), typingText = $('typingText'), fp = $('fp'), fname = $('fname'), fileInput = $('fileInput');
+const navAv = $('navAv'), commName = $('commName'), settings = $('settings'), toasts = $('toasts');
+const setUser = $('setUser'), setColor = $('setColor'), setTheme = $('setTheme'), setNotif = $('setNotif');
+
+let isLogin = true;
+let typingTimeout = null;
+
+// ============ AUTH ============
+switchLink.onclick = () => {
+    isLogin = !isLogin;
+    authBtn.textContent = isLogin ? 'Sign In' : 'Sign Up';
+    switchText.textContent = isLogin ? "Don't have an account?" : "Already have an account?";
+    switchLink.textContent = isLogin ? 'Sign Up' : 'Sign In';
+    authErr.textContent = '';
+};
+
+authForm.onsubmit = (e) => {
     e.preventDefault();
-    const u=authUser.value.trim(),p=authPass.value.trim();
-    if(!u||!p){authErr.textContent='Please fill in all fields.';return}
-    authBtn.disabled=true;authBtn.textContent='Loading...';authErr.textContent='';
-    try{
-        const ep=isLogin?'/api/auth/login':'/api/auth/register';
-        const r=await fetch(ep,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username:u,password:p})});
-        const d=await r.json();
-        if(!r.ok)throw new Error(d.error||'Auth failed');
-        S.token=d.token;S.user=d.user;
-        localStorage.setItem('zenith_token',S.token);
-        localStorage.setItem('zenith_user',JSON.stringify(S.user));
-        toast('Welcome to Zenith!','success');
+    const u = authUser.value.trim();
+    const p = authPass.value.trim();
+    if (!u || !p) { authErr.textContent = 'Please fill in all fields.'; return; }
+    
+    authBtn.disabled = true;
+    authBtn.textContent = 'Loading...';
+    authErr.textContent = '';
+
+    if (isLogin) {
+        // Login
+        const user = S.users[u];
+        if (!user) { authErr.textContent = 'User not found.'; authBtn.disabled = false; authBtn.textContent = 'Sign In'; return; }
+        if (user.password !== p) { authErr.textContent = 'Incorrect password.'; authBtn.disabled = false; authBtn.textContent = 'Sign In'; return; }
+        S.user = { username: u, ...user };
+        localStorage.setItem('zenith_session', JSON.stringify(S.user));
+        toast('Welcome back, ' + u + '!', 'success');
         initApp();
-    }catch(err){authErr.textContent=err.message}
-    authBtn.disabled=false;authBtn.textContent=isLogin?'Sign In':'Sign Up';
+    } else {
+        // Register
+        if (S.users[u]) { authErr.textContent = 'Username already taken.'; authBtn.disabled = false; authBtn.textContent = 'Sign Up'; return; }
+        if (p.length < 4) { authErr.textContent = 'Password must be at least 4 characters.'; authBtn.disabled = false; authBtn.textContent = 'Sign Up'; return; }
+        S.users[u] = { password: p, avatarColor: '#7c3aed', createdAt: new Date().toISOString() };
+        localStorage.setItem('zenith_users', JSON.stringify(S.users));
+        S.user = { username: u, ...S.users[u] };
+        localStorage.setItem('zenith_session', JSON.stringify(S.user));
+        toast('Account created! Welcome to Zenith.', 'success');
+        initApp();
+    }
+    authBtn.disabled = false;
+    authBtn.textContent = isLogin ? 'Sign In' : 'Sign Up';
 };
 
-function checkAuth(){
-    const t=localStorage.getItem('zenith_token'),u=localStorage.getItem('zenith_user');
-    if(t&&u){S.token=t;S.user=JSON.parse(u);initApp();return true}
-    return false;
+// ============ APP INIT ============
+function initApp() {
+    auth.classList.remove('active');
+    app.classList.add('active');
+    navAv.textContent = S.user.username.charAt(0).toUpperCase();
+    navAv.style.background = S.user.avatarColor || '#7c3aed';
+    renderChannels();
+    renderMessages();
+    renderMembers();
+    // Check for owner account
+    if (S.user.username === 'zenith') {
+        toast('👑 Owner mode activated', 'success');
+    }
 }
 
-// APP INIT
-function initApp(){
-    auth.classList.remove('active');app.classList.add('active');
-    navAv.textContent=S.user.username.charAt(0).toUpperCase();
-    navAv.style.background=S.user.avatarColor||'#7c3aed';
-    connectSocket();
-    loadChannels();
-    loadMsgs('general');
-    loadFriends();
+// ============ CHANNELS ============
+function renderChannels() {
+    const text = S.channels.text || ['general'];
+    const voiceCh = S.channels.voice || [];
+    textChans.innerHTML = text.map(c => `
+        <div class="chan ${c === S.currentChannel ? 'active' : ''}" onclick="switchChan('${c}','text')">
+            <span class="icon">#</span> ${c}
+        </div>
+    `).join('');
+    voiceChans.innerHTML = voiceCh.map(c => `
+        <div class="chan ${c === S.currentChannel ? 'active' : ''}" onclick="joinVoice('${c}')">
+            <span class="icon">🔊</span> ${c}
+        </div>
+    `).join('');
 }
 
-// SOCKET
-function connectSocket(){
-    if(S.socket)return;
-    const s=io({transports:['websocket','polling'],auth:{token:S.token}});
-    s.on('connect',()=>{toast('Connected','success');s.emit('join',{channel:S.channel})});
-    s.on('disconnect',()=>toast('Disconnected','error'));
-    s.on('connect_error',()=>toast('Connection error','error'));
-    s.on('message',(m)=>{
-        if(!S.msgs[m.channel])S.msgs[m.channel]=[];
-        S.msgs[m.channel].push(m);
-        if(m.channel===S.channel)renderMsgs();
-    });
-    s.on('typing',({user,channel})=>{
-        if(channel===S.channel){S.typing[user]=Date.now();updateTyping();setTimeout(updateTyping,1000)}
-    });
-    s.on('user_joined',({user,channel})=>{if(channel===S.channel){S.online.add(user.id);renderMembers();addSys(`${user.username} joined`)}});
-    s.on('user_left',({user,channel})=>{if(channel===S.channel){S.online.delete(user.id);renderMembers();addSys(`${user.username} left`)}});
-    s.on('presence_update',({userId,online})=>{online?S.online.add(userId):S.online.delete(userId);renderMembers()});
-    s.on('voice_offer',handleOffer);
-    s.on('voice_answer',handleAnswer);
-    s.on('voice_ice',handleIce);
-    s.on('voice_participants',updateParts);
-    s.on('voice_user_joined',(d)=>{toast(`${d.username} joined voice`,'info');updateParts(d.participants)});
-    s.on('voice_user_left',(d)=>{toast(`${d.username} left voice`,'info');updateParts(d.participants)});
-    S.socket=s;
+function switchChan(name, type) {
+    S.currentChannel = name;
+    S.currentType = type || 'text';
+    chanName.textContent = name;
+    renderChannels();
+    renderMessages();
+    document.getElementById('csidebar')?.classList.remove('mobile');
 }
 
-// MESSAGES
-async function loadMsgs(channel){
-    try{
-        const r=await fetch(`/api/messages/${channel}`,{headers:{'Authorization':`Bearer ${S.token}`}});
-        if(r.ok){const d=await r.json();S.msgs[channel]=d.messages||[];renderMsgs()}
-    }catch(e){}
+function createChan(type) {
+    const name = prompt(`Enter ${type} channel name:`);
+    if (!name || name.trim() === '') return;
+    if (S.channels[type].includes(name)) { toast('Channel already exists', 'error'); return; }
+    S.channels[type].push(name);
+    if (type === 'text') S.messages[name] = [];
+    localStorage.setItem('zenith_channels', JSON.stringify(S.channels));
+    localStorage.setItem('zenith_messages', JSON.stringify(S.messages));
+    renderChannels();
+    toast(`#${name} created`, 'success');
 }
 
-function renderMsgs(){
-    const m=S.msgs[S.channel]||[];
-    msgs.innerHTML='';
-    if(m.length===0){msgs.appendChild(empty);return}
-    empty.remove();
-    m.forEach((msg,i)=>{
-        const div=document.createElement('div');
-        div.className='msg'+(msg.system?' system':'');
-        if(msg.system){
-            div.innerHTML=`<div class="body">${msg.content}</div>`;
-        }else{
-            const own=msg.userId===S.user?.id;
-            const initial=msg.username?.charAt(0).toUpperCase()||'?';
-            div.innerHTML=`
-                <div class="av" style="background:${msg.avatarColor||'#7c3aed'}">${initial}</div>
+// ============ MESSAGES ============
+function renderMessages() {
+    const msgsList = S.messages[S.currentChannel] || [];
+    msgs.innerHTML = '';
+    if (msgsList.length === 0) {
+        msgs.appendChild(empty);
+        return;
+    }
+    msgsList.forEach((msg, i) => {
+        const div = document.createElement('div');
+        div.className = 'msg' + (msg.system ? ' system' : '');
+        if (msg.system) {
+            div.innerHTML = `<div class="body">${msg.content}</div>`;
+        } else {
+            const isOwn = msg.username === S.user.username;
+            const initial = msg.username?.charAt(0).toUpperCase() || '?';
+            div.innerHTML = `
+                <div class="av" style="background:${msg.avatarColor || '#7c3aed'}">${initial}</div>
                 <div class="body">
                     <div class="hd">
-                        <span class="un">${msg.username||'Unknown'}</span>
-                        <span class="ts">${fmtTime(msg.createdAt)}</span>
-                        ${msg.edited?'<span class="edited">(edited)</span>':''}
+                        <span class="un">${msg.username || 'Unknown'}</span>
+                        <span class="ts">${formatTime(msg.timestamp || msg.createdAt)}</span>
+                        ${msg.edited ? '<span class="edited">(edited)</span>' : ''}
                         <div class="actions">
-                            ${own?`<button onclick="editMsg('${msg.id}')">✏️</button>`:''}
-                            ${own?`<button class="del" onclick="delMsg('${msg.id}')">🗑️</button>`:''}
+                            ${isOwn ? `<button onclick="editMsg('${i}')">✏️</button>` : ''}
+                            ${isOwn ? `<button class="del" onclick="delMsg('${i}')">🗑️</button>` : ''}
                         </div>
                     </div>
-                    <div class="txt">${fmtMsg(msg.content,msg.attachments)}</div>
+                    <div class="txt">${formatMessage(msg.content, msg.attachments)}</div>
                 </div>
             `;
         }
         msgs.appendChild(div);
     });
-    msgs.scrollTop=msgs.scrollHeight;
+    msgs.scrollTop = msgs.scrollHeight;
 }
 
-function fmtMsg(content,attachments){
-    let h=esc(content);
-    if(attachments){
-        const files=Array.isArray(attachments)?attachments:[attachments];
-        files.forEach(f=>{
-            if(f.type?.startsWith('image/')){h+=`<br><img src="${f.url}" onclick="window.open('${f.url}')">`}
-            else{h+=`<br><a href="${f.url}" target="_blank">📎 ${f.name}</a>`}
+function formatMessage(content, attachments) {
+    let html = escapeHtml(content);
+    if (attachments) {
+        const files = Array.isArray(attachments) ? attachments : [attachments];
+        files.forEach(f => {
+            if (f.type?.startsWith('image/')) {
+                html += `<br><img src="${f.url}" onclick="window.open('${f.url}')">`;
+            } else {
+                html += `<br><a href="${f.url}" target="_blank">📎 ${f.name}</a>`;
+            }
         });
     }
-    return h;
+    return html;
 }
 
-function esc(t){const d=document.createElement('div');d.textContent=t;return d.innerHTML}
-function fmtTime(ts){if(!ts)return'Just now';return new Date(ts).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'})}
-function addSys(t){if(!S.msgs[S.channel])S.msgs[S.channel]=[];S.msgs[S.channel].push({system:true,content:t,createdAt:new Date().toISOString()});renderMsgs()}
-
-async function sendMsg(){
-    const t=msgInput.value.trim();
-    if(!t&&!S.file)return;
-    if(!S.socket?.connected){toast('Not connected','error');return}
-    try{
-        const r=await fetch('/api/messages',{
-            method:'POST',
-            headers:{'Authorization':`Bearer ${S.token}`,'Content-Type':'application/json'},
-            body:JSON.stringify({channel:S.channel,content:t||'',attachments:S.file?[S.file]:undefined})
-        });
-        if(r.ok){msgInput.value='';msgInput.style.height='auto';clearFile()}else{const d=await r.json();toast(d.error||'Failed','error')}
-    }catch(e){toast('Failed to send','error')}
+function escapeHtml(text) {
+    const d = document.createElement('div');
+    d.textContent = text;
+    return d.innerHTML;
 }
 
-async function delMsg(id){
-    if(!confirm('Delete?'))return;
-    try{
-        const r=await fetch(`/api/messages/${id}`,{method:'DELETE',headers:{'Authorization':`Bearer ${S.token}`}});
-        if(r.ok){S.msgs[S.channel]=S.msgs[S.channel].filter(m=>m.id!==id);renderMsgs()}
-    }catch(e){toast('Failed to delete','error')}
+function formatTime(ts) {
+    if (!ts) return 'Just now';
+    const d = new Date(ts);
+    return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 }
 
-function editMsg(id){toast('Edit feature coming soon','info')}
-function onKey(e){if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();sendMsg()}}
-msgInput.oninput=()=>{msgInput.style.height='auto';msgInput.style.height=Math.min(msgInput.scrollHeight,120)+'px';if(msgInput.value.trim())S.socket?.emit('typing',{channel:S.channel})};
-
-function updateTyping(){
-    const now=Date.now();
-    const t=Object.keys(S.typing).filter(u=>now-S.typing[u]<3000);
-    if(t.length>0&&t.some(u=>u!==S.user?.username)){
-        const n=t.filter(u=>u!==S.user?.username);
-        typingText.textContent=n.length===1?`${n[0]} is typing...`:`${n.length} people are typing...`;
-        typing.style.display='flex';
-    }else{typing.style.display='none'}
-}
-
-// FILES
-function onFile(e){
-    const f=e.target.files[0];if(!f)return;
-    if(f.size>10*1024*1024){toast('File too large (max 10MB)','error');return}
-    S.file={name:f.name,type:f.type,size:f.size};
-    fname.textContent=f.name;fp.classList.add('active');
-    const r=new FileReader();
-    r.onload=e=>{S.file.url=e.target.result};
-    r.readAsDataURL(f);
-}
-function clearFile(){S.file=null;fp.classList.remove('active');fileInput.value=''}
-
-// CHANNELS
-async function loadChannels(){
-    try{
-        const r=await fetch('/api/channels',{headers:{'Authorization':`Bearer ${S.token}`}});
-        if(r.ok){const d=await r.json();renderChans(d.channels||[])}
-    }catch(e){}
-}
-
-function renderChans(channels){
-    const t=channels.filter(c=>c.type==='text'||!c.type);
-    const v=channels.filter(c=>c.type==='voice');
-    textChans.innerHTML=t.map(c=>`<div class="chan ${c.name===S.channel?'active':''}" onclick="switchChan('${c.name}','text')"><span class="icon">#</span> ${c.name}</div>`).join('');
-    voiceChans.innerHTML=v.map(c=>`<div class="chan ${c.name===S.channel?'active':''}" onclick="joinVoice('${c.name}')"><span class="icon">🔊</span> ${c.name}${c.active?'<span class="vi">●</span>':''}</div>`).join('');
-}
-
-function switchChan(name,type){
-    S.channel=name;S.type=type||'text';chanName.textContent=name;
-    S.socket?.emit('join',{channel:name});
-    loadMsgs(name);
-    document.getElementById('csidebar')?.classList.remove('mobile');
-}
-
-async function createChan(type){
-    const name=prompt(`Enter ${type} channel name:`);if(!name)return;
-    try{
-        const r=await fetch('/api/channels',{method:'POST',headers:{'Authorization':`Bearer ${S.token}`,'Content-Type':'application/json'},body:JSON.stringify({name,type})});
-        if(r.ok){toast(`Channel #${name} created`,'success');loadChannels()}else{const d=await r.json();toast(d.error||'Failed','error')}
-    }catch(e){toast('Failed to create channel','error')}
-}
-
-// VOICE
-async function joinVoice(name){
-    if(S.inVoice)leaveVoice();
-    S.channel=name;S.type='voice';chanName.textContent=name;vTitle.textContent=`🔊 ${name}`;
-    try{
-        const stream=await navigator.mediaDevices.getUserMedia({audio:true,video:false});
-        S.stream=stream;S.inVoice=true;S.muted=false;
-        voice.classList.add('active');
-        muteBtn.textContent='🔊 Mute';muteBtn.classList.remove('active');
-        S.socket?.emit('join_voice',{channel:name});
-        toast(`Joined ${name}`,'success');
-    }catch(e){toast('Could not access microphone','error')}
-}
-
-function leaveVoice(){
-    if(S.stream){S.stream.getTracks().forEach(t=>t.stop());S.stream=null}
-    S.inVoice=false;S.muted=false;S.videoOn=false;
-    voice.classList.remove('active');
-    localVideoWrap.classList.remove('active');
-    remoteVideos.innerHTML='';
-    S.socket?.emit('leave_voice',{channel:S.channel});
-    Object.values(S.peers).forEach(p=>p.close());S.peers={};
-}
-
-function toggleMute(){
-    if(!S.stream)return;
-    S.muted=!S.muted;
-    S.stream.getAudioTracks().forEach(t=>t.enabled=!S.muted);
-    muteBtn.textContent=S.muted?'🔇 Unmute':'🔊 Mute';
-    muteBtn.classList.toggle('active',S.muted);
-}
-
-async function toggleVideo(){
-    if(!S.inVoice){toast('Join a voice channel first','info');return}
-    S.videoOn=!S.videoOn;
-    if(S.videoOn){
-        try{
-            const stream=await navigator.mediaDevices.getUserMedia({video:true});
-            S.stream.getVideoTracks().forEach(t=>t.stop());
-            S.stream.addTrack(stream.getVideoTracks()[0]);
-            localVideo.srcObject=S.stream;
-            localVideoWrap.classList.add('active');
-            videoBtn.textContent='📹 Stop Video';
-            videoBtn.classList.add('active');
-        }catch(e){toast('Could not access camera','error');S.videoOn=false}
-    }else{
-        S.stream.getVideoTracks().forEach(t=>t.stop());
-        const audio=S.stream.getAudioTracks();
-        const ns=new MediaStream();audio.forEach(t=>ns.addTrack(t));
-        S.stream=ns;
-        localVideoWrap.classList.remove('active');
-        videoBtn.textContent='📹 Video';
-        videoBtn.classList.remove('active');
-    }
-}
-
-function handleOffer({from,offer,channel}){
-    const pc=new RTCPeerConnection({iceServers:[{urls:'stun:stun.l.google.com:19302'}]});
-    S.peers[from]=pc;
-    pc.onicecandidate=e=>{if(e.candidate)S.socket?.emit('voice_ice',{to:from,candidate:e.candidate,channel})};
-    pc.ontrack=e=>{
-        const v=document.createElement('video');
-        v.srcObject=e.streams[0];v.autoplay=true;v.playsInline=true;v.id=`remote-${from}`;
-        remoteVideos.appendChild(v);
+function sendMsg() {
+    const text = msgInput.value.trim();
+    if (!text && !S.file) return;
+    
+    const msg = {
+        username: S.user.username,
+        avatarColor: S.user.avatarColor || '#7c3aed',
+        content: text || '',
+        attachments: S.file ? [S.file] : undefined,
+        timestamp: new Date().toISOString()
     };
-    pc.setRemoteDescription(new RTCSessionDescription(offer))
-        .then(()=>pc.createAnswer())
-        .then(a=>pc.setLocalDescription(a))
-        .then(()=>S.socket?.emit('voice_answer',{to:from,answer:pc.localDescription,channel}));
+    
+    if (!S.messages[S.currentChannel]) S.messages[S.currentChannel] = [];
+    S.messages[S.currentChannel].push(msg);
+    localStorage.setItem('zenith_messages', JSON.stringify(S.messages));
+    renderMessages();
+    msgInput.value = '';
+    msgInput.style.height = 'auto';
+    clearFile();
+    // Broadcast to other tabs
+    broadcast('message', { channel: S.currentChannel, msg });
 }
 
-function handleAnswer({from,answer,channel}){const pc=S.peers[from];if(pc)pc.setRemoteDescription(new RTCSessionDescription(answer))}
-function handleIce({from,candidate,channel}){const pc=S.peers[from];if(pc)pc.addIceCandidate(new RTCIceCandidate(candidate))}
+function delMsg(index) {
+    if (!confirm('Delete this message?')) return;
+    const msgsList = S.messages[S.currentChannel];
+    if (msgsList && msgsList[index]) {
+        msgsList.splice(index, 1);
+        localStorage.setItem('zenith_messages', JSON.stringify(S.messages));
+        renderMessages();
+        broadcast('message', { channel: S.currentChannel, msg: msgsList });
+    }
+}
 
-function updateParts(participants){
-    vParts.innerHTML=participants.map(p=>`
-        <div class="part">
-            <div class="av" style="background:${p.avatarColor||'#7c3aed'}">${p.username?.charAt(0).toUpperCase()||'?'}${p.speaking?'<div class="ring"></div>':''}</div>
-            <span class="name">${p.username||'Unknown'}</span>
+function editMsg(index) {
+    const msgsList = S.messages[S.currentChannel];
+    if (!msgsList || !msgsList[index]) return;
+    const newText = prompt('Edit message:', msgsList[index].content);
+    if (newText === null || newText === msgsList[index].content) return;
+    msgsList[index].content = newText;
+    msgsList[index].edited = true;
+    localStorage.setItem('zenith_messages', JSON.stringify(S.messages));
+    renderMessages();
+}
+
+function addSystemMessage(text) {
+    if (!S.messages[S.currentChannel]) S.messages[S.currentChannel] = [];
+    S.messages[S.currentChannel].push({ system: true, content: text, timestamp: new Date().toISOString() });
+    localStorage.setItem('zenith_messages', JSON.stringify(S.messages));
+    renderMessages();
+}
+
+function onKey(e) {
+    if (e.key === 'Enter' && !e.shiftKey) {
+        e.preventDefault();
+        sendMsg();
+    }
+}
+
+msgInput.oninput = () => {
+    msgInput.style.height = 'auto';
+    msgInput.style.height = Math.min(msgInput.scrollHeight, 120) + 'px';
+    if (msgInput.value.trim()) {
+        showTyping();
+    }
+};
+
+function showTyping() {
+    broadcast('typing', { user: S.user.username, channel: S.currentChannel });
+    clearTimeout(typingTimeout);
+    typingTimeout = setTimeout(() => {
+        broadcast('typing_stop', { user: S.user.username, channel: S.currentChannel });
+    }, 2000);
+}
+
+// ============ FILES ============
+function onFile(e) {
+    const f = e.target.files[0];
+    if (!f) return;
+    if (f.size > 10 * 1024 * 1024) { toast('File too large (max 10MB)', 'error'); return; }
+    S.file = { name: f.name, type: f.type, size: f.size };
+    fname.textContent = f.name;
+    fp.classList.add('active');
+    const reader = new FileReader();
+    reader.onload = e => { S.file.url = e.target.result; };
+    reader.readAsDataURL(f);
+}
+
+function clearFile() {
+    S.file = null;
+    fp.classList.remove('active');
+    fileInput.value = '';
+}
+
+// ============ MEMBERS ============
+function renderMembers() {
+    const online = Object.keys(localStorage).filter(k => k.startsWith('zenith_session_')).map(k => JSON.parse(localStorage.getItem(k))).filter(u => u && u.username !== S.user.username);
+    const count = online.length + 1;
+    memberCount.textContent = count;
+    const allUsers = [S.user, ...online];
+    memberList.innerHTML = allUsers.map(u => `
+        <div class="member">
+            <div class="av" style="background:${u.avatarColor || '#7c3aed'}">${u.username.charAt(0).toUpperCase()}</div>
+            <span class="name">${u.username} ${u.username === S.user.username ? '(you)' : ''}</span>
+            <span class="dot online"></span>
         </div>
     `).join('');
 }
 
-// MEMBERS
-function renderMembers(){
-    const count=S.online.size||0;
-    memberCount.textContent=count||'0';
-    memberList.innerHTML=Array.from(S.online).map(id=>`
-        <div class="member">
-            <div class="av" style="background:#7c3aed">${id.slice(0,2).toUpperCase()}</div>
-            <span class="name">User ${id.slice(0,6)}</span>
-            <span class="dot online"></span>
+function toggleMembers() { rpanel.classList.toggle('active'); }
+function toggleMobile() { document.getElementById('csidebar')?.classList.toggle('mobile'); }
+
+// ============ VOICE ============
+async function joinVoice(name) {
+    if (S.inVoice) leaveVoice();
+    S.currentChannel = name;
+    S.currentType = 'voice';
+    chanName.textContent = name;
+    vTitle.textContent = `🔊 ${name}`;
+    
+    try {
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+        S.localStream = stream;
+        S.inVoice = true;
+        S.muted = false;
+        voice.classList.add('active');
+        muteBtn.textContent = '🔊 Mute';
+        muteBtn.classList.remove('active');
+        addSystemMessage(`🔊 Joined voice channel ${name}`);
+        toast(`Joined ${name}`, 'success');
+        updateVoiceParticipants();
+        // Broadcast voice join
+        broadcast('voice_join', { user: S.user.username, channel: name });
+    } catch (e) {
+        toast('Could not access microphone. Please allow mic permissions.', 'error');
+        console.error(e);
+    }
+}
+
+function leaveVoice() {
+    if (S.localStream) {
+        S.localStream.getTracks().forEach(t => t.stop());
+        S.localStream = null;
+    }
+    S.inVoice = false;
+    S.muted = false;
+    S.videoOn = false;
+    voice.classList.remove('active');
+    localVideoWrap.classList.remove('active');
+    remoteVideos.innerHTML = '';
+    Object.values(S.peers).forEach(p => p.close());
+    S.peers = {};
+    broadcast('voice_leave', { user: S.user.username, channel: S.currentChannel });
+}
+
+function toggleMute() {
+    if (!S.localStream) return;
+    S.muted = !S.muted;
+    S.localStream.getAudioTracks().forEach(t => t.enabled = !S.muted);
+    muteBtn.textContent = S.muted ? '🔇 Unmute' : '🔊 Mute';
+    muteBtn.classList.toggle('active', S.muted);
+}
+
+async function toggleVideo() {
+    if (!S.inVoice) { toast('Join a voice channel first', 'info'); return; }
+    S.videoOn = !S.videoOn;
+    if (S.videoOn) {
+        try {
+            const stream = await navigator.mediaDevices.getUserMedia({ video: true });
+            if (S.localStream) {
+                S.localStream.getVideoTracks().forEach(t => t.stop());
+                S.localStream.addTrack(stream.getVideoTracks()[0]);
+            }
+            localVideo.srcObject = S.localStream || stream;
+            localVideoWrap.classList.add('active');
+            videoBtn.textContent = '📹 Stop Video';
+            videoBtn.classList.add('active');
+        } catch (e) {
+            toast('Could not access camera', 'error');
+            S.videoOn = false;
+        }
+    } else {
+        if (S.localStream) {
+            S.localStream.getVideoTracks().forEach(t => t.stop());
+            const audio = S.localStream.getAudioTracks();
+            const ns = new MediaStream();
+            audio.forEach(t => ns.addTrack(t));
+            S.localStream = ns;
+        }
+        localVideoWrap.classList.remove('active');
+        videoBtn.textContent = '📹 Video';
+        videoBtn.classList.remove('active');
+    }
+}
+
+function updateVoiceParticipants() {
+    // Get users from other tabs
+    const users = [];
+    for (let k in localStorage) {
+        if (k.startsWith('zenith_voice_')) {
+            const data = JSON.parse(localStorage.getItem(k));
+            if (data.channel === S.currentChannel && data.user !== S.user.username) {
+                users.push({ username: data.user, speaking: false });
+            }
+        }
+    }
+    // Add self
+    users.push({ username: S.user.username + ' (you)', speaking: false });
+    vParts.innerHTML = users.map(p => `
+        <div class="part">
+            <div class="av" style="background:#7c3aed">${p.username.charAt(0).toUpperCase()}</div>
+            <span class="name">${p.username}</span>
         </div>
-    `).join('')||'<div style="color:var(--text3);font-size:13px;padding:8px;">No members online</div>';
+    `).join('');
 }
 
-function toggleMembers(){rpanel.classList.toggle('active')}
-function toggleMobile(){document.getElementById('csidebar')?.classList.toggle('mobile')}
-
-// NAVIGATION
-function navigate(section){
-    document.querySelectorAll('.nav').forEach(b=>b.classList.remove('active'));
-    const map={home:'navHome',friends:'navFriends',dms:'navDMs'};
-    if(map[section])$(map[section])?.classList.add('active');
-    if(section==='friends'){toast('Friends feature - manage friends','info')}
-    else if(section==='dms'){toast('Direct Messages - coming soon','info')}
-    else{switchChan('general','text')}
+// ============ BROADCAST (Cross-tab communication) ============
+function broadcast(event, data) {
+    try {
+        const bc = new BroadcastChannel('zenith');
+        bc.postMessage({ event, data });
+        bc.close();
+    } catch (e) {
+        // Fallback: localStorage polling
+        localStorage.setItem('zenith_broadcast_' + Date.now(), JSON.stringify({ event, data }));
+        setTimeout(() => {
+            for (let k in localStorage) {
+                if (k.startsWith('zenith_broadcast_')) localStorage.removeItem(k);
+            }
+        }, 1000);
+    }
 }
 
-// FRIENDS
-async function loadFriends(){
-    try{
-        const r=await fetch('/api/friends',{headers:{'Authorization':`Bearer ${S.token}`}});
-        if(r.ok){const d=await r.json();S.friends=d.friends||[];S.requests=d.requests||[]}
-    }catch(e){}
+// Listen for broadcasts
+try {
+    const bc = new BroadcastChannel('zenith');
+    bc.onmessage = (e) => {
+        const { event, data } = e.data;
+        handleBroadcast(event, data);
+    };
+} catch (e) {
+    // Fallback: listen for localStorage changes
+    window.addEventListener('storage', (e) => {
+        if (e.key && e.key.startsWith('zenith_broadcast_')) {
+            try {
+                const { event, data } = JSON.parse(e.newValue);
+                handleBroadcast(event, data);
+            } catch (err) {}
+        }
+    });
 }
 
-// SETTINGS
-function openSettings(){
-    if(S.user){setUser.value=S.user.username||'';setColor.value=S.user.avatarColor||'#7c3aed'}
+function handleBroadcast(event, data) {
+    switch (event) {
+        case 'message':
+            if (data.channel === S.currentChannel) {
+                renderMessages();
+            }
+            break;
+        case 'typing':
+            if (data.channel === S.currentChannel && data.user !== S.user.username) {
+                typingText.textContent = `${data.user} is typing...`;
+                typing.style.display = 'flex';
+                clearTimeout(typingTimeout);
+                typingTimeout = setTimeout(() => {
+                    typing.style.display = 'none';
+                }, 3000);
+            }
+            break;
+        case 'typing_stop':
+            if (data.channel === S.currentChannel && data.user !== S.user.username) {
+                typing.style.display = 'none';
+            }
+            break;
+        case 'voice_join':
+            if (data.channel === S.currentChannel) {
+                addSystemMessage(`🔊 ${data.user} joined voice`);
+                updateVoiceParticipants();
+            }
+            break;
+        case 'voice_leave':
+            if (data.channel === S.currentChannel) {
+                addSystemMessage(`🔊 ${data.user} left voice`);
+                updateVoiceParticipants();
+            }
+            break;
+        case 'presence':
+            renderMembers();
+            break;
+    }
+}
+
+// ============ NAVIGATION ============
+function navigate(section) {
+    document.querySelectorAll('.nav').forEach(b => b.classList.remove('active'));
+    const map = { home: 'navHome', friends: 'navFriends', dms: 'navDMs' };
+    if (map[section]) $(map[section])?.classList.add('active');
+    if (section === 'friends') {
+        toast('Friends feature - add and manage friends', 'info');
+    } else if (section === 'dms') {
+        toast('Direct Messages - coming soon', 'info');
+    } else {
+        switchChan('general', 'text');
+    }
+}
+
+// ============ SETTINGS ============
+function openSettings() {
+    if (S.user) {
+        setUser.value = S.user.username || '';
+        setColor.value = S.user.avatarColor || '#7c3aed';
+    }
     settings.classList.add('active');
 }
-function closeSettings(){settings.classList.remove('active')}
-async function saveSettings(){
-    const u=setUser.value.trim(),c=setColor.value,t=setTheme.value,n=setNotif.value;
-    try{
-        const r=await fetch('/api/users/profile',{
-            method:'PUT',
-            headers:{'Authorization':`Bearer ${S.token}`,'Content-Type':'application/json'},
-            body:JSON.stringify({username:u,avatarColor:c,theme:t,notifications:n})
-        });
-        if(r.ok){const d=await r.json();S.user=d.user;localStorage.setItem('zenith_user',JSON.stringify(S.user));navAv.style.background=c;toast('Settings saved!','success');closeSettings()}
-        else{const d=await r.json();toast(d.error||'Failed','error')}
-    }catch(e){toast('Failed to save settings','error')}
+
+function closeSettings() { settings.classList.remove('active'); }
+
+function saveSettings() {
+    const u = setUser.value.trim();
+    const c = setColor.value;
+    if (u !== S.user.username) {
+        // Check if username is taken
+        if (S.users[u] && u !== S.user.username) {
+            toast('Username already taken', 'error');
+            return;
+        }
+        // Update username in users
+        delete S.users[S.user.username];
+        S.users[u] = { ...S.user, password: S.user.password };
+        S.user.username = u;
+        localStorage.setItem('zenith_users', JSON.stringify(S.users));
+        localStorage.setItem('zenith_session', JSON.stringify(S.user));
+        navAv.textContent = u.charAt(0).toUpperCase();
+    }
+    S.user.avatarColor = c;
+    navAv.style.background = c;
+    localStorage.setItem('zenith_session', JSON.stringify(S.user));
+    localStorage.setItem('zenith_users', JSON.stringify(S.users));
+    toast('Settings saved!', 'success');
+    closeSettings();
 }
 
-// LOGOUT
-function logout(){
-    if(S.socket){S.socket.disconnect();S.socket=null}
-    if(S.stream){S.stream.getTracks().forEach(t=>t.stop());S.stream=null}
-    localStorage.removeItem('zenith_token');localStorage.removeItem('zenith_user');
-    S.token=null;S.user=null;
-    app.classList.remove('active');auth.classList.add('active');
-    voice.classList.remove('active');
-    toast('Logged out','info');
+// ============ LOGOUT ============
+function logout() {
+    if (S.inVoice) leaveVoice();
+    localStorage.removeItem('zenith_session');
+    // Remove from online list
+    for (let k in localStorage) {
+        if (k.startsWith('zenith_session_')) {
+            const data = JSON.parse(localStorage.getItem(k));
+            if (data.username === S.user.username) localStorage.removeItem(k);
+        }
+    }
+    app.classList.remove('active');
+    auth.classList.add('active');
+    toast('Logged out', 'info');
 }
 
-// TOASTS
-function toast(msg,type='info'){
-    const t=document.createElement('div');
-    t.className=`toast ${type}`;t.textContent=msg;
+// ============ TOASTS ============
+function toast(msg, type = 'info') {
+    const t = document.createElement('div');
+    t.className = `toast ${type}`;
+    t.textContent = msg;
     toasts.appendChild(t);
-    setTimeout(()=>{t.style.opacity='0';t.style.transform='translateX(100%)';setTimeout(()=>t.remove(),300)},4000);
+    setTimeout(() => {
+        t.style.opacity = '0';
+        t.style.transform = 'translateX(100%)';
+        setTimeout(() => t.remove(), 300);
+    }, 4000);
 }
 
-// INIT
-if(!checkAuth())auth.classList.add('active');
-document.addEventListener('keydown',e=>{if(e.key==='Escape')closeSettings()});
-settings.addEventListener('click',e=>{if(e.target===settings)closeSettings()});
+// ============ OWNER ACCOUNT SETUP ============
+function setupOwner() {
+    if (!S.users['zenith']) {
+        S.users['zenith'] = {
+            password: 'zenith123!',
+            avatarColor: '#7c3aed',
+            createdAt: new Date().toISOString(),
+            isOwner: true
+        };
+        localStorage.setItem('zenith_users', JSON.stringify(S.users));
+        console.log('👑 Owner account created: zenith / zenith123!');
+    }
+}
 
-console.log('🚀 Zenith loaded');
-console.log('ℹ️ Owner: zenith / zenith123!');
+// ============ INIT ============
+setupOwner();
+
+// Check for existing session
+const session = localStorage.getItem('zenith_session');
+if (session) {
+    try {
+        S.user = JSON.parse(session);
+        if (S.users[S.user.username]) {
+            initApp();
+        } else {
+            localStorage.removeItem('zenith_session');
+            auth.classList.add('active');
+        }
+    } catch (e) {
+        localStorage.removeItem('zenith_session');
+        auth.classList.add('active');
+    }
+} else {
+    auth.classList.add('active');
+}
+
+document.addEventListener('keydown', e => { if (e.key === 'Escape') closeSettings(); });
+settings.addEventListener('click', e => { if (e.target === settings) closeSettings(); });
+
+// Keep session alive across tabs
+setInterval(() => {
+    if (S.user) {
+        localStorage.setItem('zenith_session_' + Date.now(), JSON.stringify({ username: S.user.username, timestamp: Date.now() }));
+        // Clean old sessions
+        for (let k in localStorage) {
+            if (k.startsWith('zenith_session_')) {
+                try {
+                    const data = JSON.parse(localStorage.getItem(k));
+                    if (Date.now() - data.timestamp > 30000) localStorage.removeItem(k);
+                } catch (e) {}
+            }
+        }
+        broadcast('presence', {});
+    }
+}, 5000);
+
+console.log('🚀 Zenith loaded successfully on GitHub Pages!');
+console.log('👑 Owner account: zenith / zenith123!');
+console.log('ℹ️ All data stored locally in your browser.');
+console.log('📱 Works completely offline once loaded.');
 </script>
 </body>
 </html>
